@@ -426,13 +426,24 @@ h1 {
 }
 
 .summary-overview {
-  margin: 0 0 14px;
+  margin: 0;
   font-size: 14px;
   color: #475569;
   line-height: 1.55;
 }
 
-.task-list {
+.summary-section {
+  margin-top: 16px;
+}
+
+.section-head {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #6d28d9;
+  margin-bottom: 8px;
+}
+
+.bullet-list {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -441,7 +452,7 @@ h1 {
   gap: 9px;
 }
 
-.task-list li {
+.bullet-list li {
   display: flex;
   align-items: flex-start;
   gap: 10px;
@@ -459,13 +470,18 @@ h1 {
   width: 20px;
   height: 20px;
   border-radius: 6px;
-  background: #ede9fe;
-  color: #7c3aed;
+  background: #dcfce7;
+  color: #15803d;
   font-size: 12px;
   font-weight: 800;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+
+.check.qmark {
+  background: #fef3c7;
+  color: #b45309;
 }
 
 /* Q&A */

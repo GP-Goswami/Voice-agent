@@ -289,10 +289,10 @@ export default function App() {
               >
                 {summarizing ? (
                   <>
-                    <span className="spinner dark" /> Finding tasks…
+                    <span className="spinner dark" /> Analyzing…
                   </>
                 ) : (
-                  "✨ Summary & tasks"
+                  "✨ Summary, tasks & doubts"
                 )}
               </button>
               {result.note && <span className="note">{result.note}</span>}
@@ -301,30 +301,59 @@ export default function App() {
             {summary && (
               <div className="summary">
                 <div className="summary-title">
-                  📌 Action items
+                  ✨ AI analysis
                   {summary.provider && summary.provider !== "none" && (
                     <span className="provider-tag">
                       via {summary.provider === "nvidia" ? "NVIDIA Llama" : "Gemini"}
                     </span>
                   )}
                 </div>
-                {summary.summary && (
-                  <p className="summary-overview">{summary.summary}</p>
-                )}
-                {summary.tasks && summary.tasks.length > 0 ? (
-                  <ul className="task-list">
-                    {summary.tasks.map((t, i) => (
-                      <li key={i}>
-                        <span className="check">✓</span>
-                        {t}
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="note">
-                    {summary.note || "No clear tasks found in this transcript."}
-                  </p>
-                )}
+
+                {summary.note && <p className="note">{summary.note}</p>}
+
+                {/* 1. Summary of the chat */}
+                <div className="summary-section">
+                  <div className="section-head">📝 Summary</div>
+                  {summary.summary ? (
+                    <p className="summary-overview">{summary.summary}</p>
+                  ) : (
+                    <p className="note">No summary available.</p>
+                  )}
+                </div>
+
+                {/* 2. Tasks */}
+                <div className="summary-section">
+                  <div className="section-head">✅ Tasks</div>
+                  {summary.tasks && summary.tasks.length > 0 ? (
+                    <ul className="bullet-list">
+                      {summary.tasks.map((t, i) => (
+                        <li key={i}>
+                          <span className="check">✓</span>
+                          {t}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="note">No tasks found.</p>
+                  )}
+                </div>
+
+                {/* 3. Doubts */}
+                <div className="summary-section">
+                  <div className="section-head">❓ Doubts</div>
+                  {summary.doubts && summary.doubts.length > 0 ? (
+                    <ul className="bullet-list">
+                      {summary.doubts.map((d, i) => (
+                        <li key={i}>
+                          <span className="check qmark">?</span>
+                          {d}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="note">No doubts found.</p>
+                  )}
+                </div>
               </div>
             )}
 
@@ -371,7 +400,7 @@ export default function App() {
         )}
       </main>
 
-      <footer>Connected to {API_BASE}</footer>
+      <footer>Connected to {API_BASE || "this server"}</footer>
     </div>
   );
 }

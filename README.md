@@ -1,8 +1,22 @@
+---
+title: VoiceScribe
+emoji: 🎙️
+colorFrom: indigo
+colorTo: purple
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # 🎙️ Voice → Text Converter
 
 Upload (or record) an English voice clip and convert it to text. React frontend,
 FastAPI backend, with a **two-phase** pipeline that stays free by default and
 only calls an AI model for hard-to-understand audio.
+
+> The block above is config for Hugging Face Spaces (ignored by GitHub except as
+> a small table). It tells the Space to build the `Dockerfile` and serve on port
+> 7860.
 
 See [CLAUDE.md](CLAUDE.md) for the full design.
 
@@ -57,23 +71,48 @@ npm run dev
 Open http://localhost:5173. If your backend isn't on localhost:8000, create
 `frontend/.env` with `VITE_API_BASE=<your backend url>`.
 
-## Deploy (free)
+## Deploy free — all-in-one on Hugging Face Spaces
 
-**Backend** → Render / Railway / Hugging Face Spaces (free tiers; can install
-ffmpeg).
-- Start command: `uvicorn main:app --host 0.0.0.0 --port $PORT`
-- On Render, add a `render.yaml` or an "apt" build step for ffmpeg, or use a
-  Docker image with ffmpeg preinstalled.
-- Set env vars: `GEMINI_API_KEY`, and `ALLOWED_ORIGINS` = your frontend URL.
+The included `Dockerfile` builds the React frontend and runs FastAPI, which
+serves both the API and the frontend from **one** URL. ffmpeg is installed in
+the image, so audio decoding works.
 
-**Frontend** → Vercel / Netlify / GitHub Pages.
-- Build: `npm run build` → static files in `frontend/dist`.
-- Set `VITE_API_BASE` to your deployed backend URL at build time.
+1. Create a free account at https://huggingface.co.
+2. **New → Space.** Owner = you, name = `voicescribe`, **SDK = Docker**,
+   template = Blank, visibility = Public or Private. Create.
+3. Push this project to the Space's git repo (it gives you the URL):
+   ```bash
+   git init
+   git add .
+   git commit -m "VoiceScribe"
+   git remote add space https://huggingface.co/spaces/<your-username>/voicescribe
+   git push space main        # use the HF access token as the password
+   ```
+   (Create a token at https://huggingface.co/settings/tokens → "Write".)
+4. In the Space → **Settings → Variables and secrets**, add **secrets**:
+   - `NVIDIA_API_KEY` = your NVIDIA key (for summary + Q&A)
+   - `GEMINI_API_KEY` = your Gemini key (for Phase 2 audio fallback)
+   - optional: `SUMMARY_PROVIDER` = `nvidia`
+5. The Space builds the Dockerfile and goes live at
+   `https://<your-username>-voicescribe.hf.space`. Open it and use the app.
+
+> Rebuilds happen automatically on every `git push space main`.
+
+### Keep the code on GitHub too (optional)
+
+```bash
+git remote add origin https://github.com/<you>/voicescribe.git
+git push origin main
+```
+
+You can then push to both: `git push origin main` (code) and
+`git push space main` (deploy). GitHub stores the code; the Space runs it.
 
 ## Project structure
 
 ```
-backend/   FastAPI app + two-phase pipeline
-frontend/  React (Vite) upload/record UI
-CLAUDE.md  design doc
+Dockerfile   builds frontend + runs backend (for Hugging Face Spaces)
+backend/     FastAPI app + two-phase pipeline; serves ./static in production
+frontend/    React (Vite) upload/record UI
+CLAUDE.md    design doc
 ```

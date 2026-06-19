@@ -9,6 +9,7 @@ load_dotenv()
 
 from fastapi import FastAPI, File, HTTPException, UploadFile  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
 import speech_service  # noqa: E402
@@ -81,6 +82,13 @@ def ask(req: AskRequest):
         return speech_service.ask_question(req.text, req.question, req.history)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"Q&A failed: {exc}") from exc
+
+
+# Serve the built React frontend (production / Docker) if it's present, so the
+# whole app runs from one server. Mounted last so /api/* routes take priority.
+_static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+if os.path.isdir(_static_dir):
+    app.mount("/", StaticFiles(directory=_static_dir, html=True), name="frontend")
 
 
 # Allow `python main.py` for convenience.

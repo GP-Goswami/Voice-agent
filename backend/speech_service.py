@@ -351,11 +351,17 @@ def summary_provider() -> str:
 
 SUMMARY_PROMPT = (
     "You are a meeting-notes assistant like Fathom. Read the transcript below "
-    "and extract the action items / tasks.\n"
+    "and produce three things:\n"
+    "1. summary  - a clear summary of the conversation (2-4 sentences).\n"
+    "2. tasks    - the action items / things to do.\n"
+    "3. doubts   - any open questions, doubts, unclear points, or things that "
+    "need follow-up.\n"
     "Return ONLY valid JSON of the form:\n"
-    '{"summary": "<1-2 sentence overview>", "tasks": ["<task 1>", "<task 2>"]}\n'
-    "Each task must be a short, clear, actionable bullet. If there are no real "
-    "tasks, return an empty tasks array. Do not wrap the JSON in code fences.\n\n"
+    '{"summary": "<short paragraph>", '
+    '"tasks": ["<task 1>", "<task 2>"], '
+    '"doubts": ["<doubt 1>", "<doubt 2>"]}\n'
+    "Each task and doubt must be a short, clear bullet. Use an empty array when "
+    "there are none. Do not wrap the JSON in code fences.\n\n"
     "TRANSCRIPT:\n"
 )
 
@@ -389,14 +395,16 @@ def _parse_summary(raw: str) -> dict:
         data = json.loads(cleaned)
         summary = str(data.get("summary", "")).strip()
         tasks = [str(t).strip() for t in data.get("tasks", []) if str(t).strip()]
-        return {"summary": summary, "tasks": tasks, "note": ""}
+        doubts = [str(d).strip() for d in data.get("doubts", []) if str(d).strip()]
+        return {"summary": summary, "tasks": tasks, "doubts": doubts, "note": ""}
     except (json.JSONDecodeError, AttributeError):
+        # Couldn't parse JSON — treat any bullet-like lines as tasks.
         tasks = [
             line.lstrip("-*• ").strip()
             for line in raw.splitlines()
             if line.strip().startswith(("-", "*", "•"))
         ]
-        return {"summary": "", "tasks": tasks, "note": ""}
+        return {"summary": "", "tasks": tasks, "doubts": [], "note": ""}
 
 
 def summarize_tasks(text: str) -> dict:
@@ -407,7 +415,7 @@ def summarize_tasks(text: str) -> dict:
     """
     text = (text or "").strip()
     if not text:
-        return {"summary": "", "tasks": [], "provider": "none",
+        return {"summary": "", "tasks": [], "doubts": [], "provider": "none",
                 "note": "No text to summarize."}
 
     provider = summary_provider()
@@ -419,7 +427,7 @@ def summarize_tasks(text: str) -> dict:
         raw = _gemini_text(prompt)
     else:
         return {
-            "summary": "", "tasks": [], "provider": "none",
+            "summary": "", "tasks": [], "doubts": [], "provider": "none",
             "note": "Summary needs NVIDIA_API_KEY or GEMINI_API_KEY in backend/.env.",
         }
 
