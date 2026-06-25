@@ -260,7 +260,9 @@ export default function App() {
                   {result.level === "easy" ? "🟢 Easy" : "🔴 Hard"}
                 </span>
                 <span className="badge engine">
-                  {result.engine === "gemini" ? "🤖 AI (Gemini)" : "⚡ Speech Recognition"}
+                  {result.engine === "gemini"
+                    ? "🤖 AI (Gemini)"
+                    : "⚡ Whisper (offline)"}
                 </span>
                 {typeof result.confidence === "number" && (
                   <span className="badge conf">

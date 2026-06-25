@@ -17,32 +17,33 @@ The core idea: try the **free, offline-friendly** path first, and only fall back
 to an AI model when the audio is genuinely hard to understand. This keeps it free
 by default and future-proof.
 
-- **Phase 1 — Speech Recognition (free, default)**
-  - Uses the `SpeechRecognition` Python library with Google's free Web Speech
-    endpoint (no API key required).
-  - Returns the best transcript plus a **confidence** score.
+- **Phase 1 — Whisper (free, offline, default)**
+  - Uses `faster-whisper` (OpenAI Whisper, optimized) — fully offline, no API
+    key. It transcribes the **entire** clip reliably (built-in VAD + 30s
+    windowing), so long audio is never cut off. It also decodes webm/mp3/m4a
+    itself (via PyAV), so it doesn't depend on system ffmpeg.
+  - Returns the transcript plus a **confidence** (from segment avg log-probs).
   - We classify the result:
-    - `confidence >= THRESHOLD` (default 0.75) -> level = **easy**, we keep the result.
-    - `confidence < THRESHOLD` or recognition fails -> level = **hard**, go to Phase 2.
+    - `confidence >= THRESHOLD` (default 0.45) -> level = **easy**, keep it.
+    - empty / very low confidence -> level = **hard**, optionally try Phase 2.
+  - Model is configurable via `WHISPER_MODEL` (tiny.en/base.en/small.en/...).
 
 - **Phase 2 — AI model fallback (Gemini, free tier)**
-  - Only runs when Phase 1 says the speech is "hard" (low confidence / failed /
-    too few words).
-  - Uses Google `gemini-2.0-flash` (free tier) via `google-generativeai` to
-    transcribe the same audio.
-  - Requires `GEMINI_API_KEY` in the backend env. If the key is missing, Phase 2
-    is skipped and we return the best Phase-1 result with a note.
+  - Safety net that runs only when Phase 1 returns empty / near-empty text.
+  - Uses Google `gemini-2.5-flash-lite` (free tier) via `google-generativeai`.
+  - Requires `GEMINI_API_KEY`. If missing, Phase 2 is skipped and we return the
+    Whisper result (which is already the full clip).
 
 So every response tells the user: the text, the detected level, and which engine
-produced the final text (`speech_recognition` or `gemini`).
+produced the final text (`whisper` or `gemini`).
 
 ## Why these choices (free / future)
 
-- `SpeechRecognition` + Google Web Speech = free, no key, good for clear English.
-- Gemini free tier = strong fallback for hard/accented/noisy audio.
-- Everything else is open source. No paid services are required to run the app.
-- Swappable: Phase 1 can later be replaced with Vosk or faster-whisper (fully
-  offline) without changing the API contract; Phase 2 can be any LLM.
+- `faster-whisper` = free, offline, accurate, handles full-length audio with no
+  API key and no length cutoff. This is the main engine.
+- Gemini free tier = optional safety net for the rare empty result.
+- Summary/Q&A use a text LLM (NVIDIA Llama by default, Gemini optional).
+- Everything is open source / free-tier. Swappable without changing the API.
 
 ## Project layout
 
@@ -74,7 +75,7 @@ Response JSON:
 {
   "text": "the recognized transcript",
   "level": "easy | hard",
-  "engine": "speech_recognition | gemini",
+  "engine": "whisper | gemini",
   "confidence": 0.0,
   "phase": 1,
   "note": "optional human-readable note"
@@ -86,17 +87,22 @@ Response JSON:
 ## Audio handling
 
 - Browsers record `audio/webm`; uploads may be mp3/m4a/wav/ogg.
-- The backend uses `pydub` to decode any input to 16 kHz mono WAV before
-  Phase 1. **`pydub` needs `ffmpeg` installed** on the machine/host.
-- Gemini (Phase 2) accepts the original bytes directly (it handles many formats),
-  so it does not strictly need ffmpeg, but we reuse the decoded WAV for consistency.
+- Phase 1 (Whisper) decodes the input bytes itself via PyAV — **no system
+  ffmpeg required** for transcription.
+- Phase 2 (Gemini) reuses `pydub` to make a 16 kHz mono WAV; that path needs
+  ffmpeg, but it only runs in the rare empty-result fallback.
 
 ## Config (backend/.env)
 
-- `GEMINI_API_KEY`        - optional; enables Phase 2.
-- `GEMINI_MODEL`          - default `gemini-2.0-flash`.
-- `CONFIDENCE_THRESHOLD`  - default `0.75`; below this -> level "hard" -> Phase 2.
+- `WHISPER_MODEL`         - default `base.en` (tiny.en/base.en/small.en/...).
+- `WHISPER_DEVICE`        - default `cpu`.
+- `WHISPER_COMPUTE`       - default `int8`.
+- `GEMINI_API_KEY`        - optional; enables the Phase 2 safety net.
+- `GEMINI_MODEL`          - default `gemini-2.5-flash-lite`.
+- `CONFIDENCE_THRESHOLD`  - default `0.45`; below this -> level "hard".
 - `MIN_WORDS`             - default `1`; fewer recognized words -> treat as hard.
+- `NVIDIA_API_KEY`        - text LLM for summary + Q&A (default provider).
+- `SUMMARY_PROVIDER`      - `nvidia` or `gemini` (default `nvidia`).
 - `ALLOWED_ORIGINS`       - CORS origins, comma separated. Default allows all.
 
 ## Run locally

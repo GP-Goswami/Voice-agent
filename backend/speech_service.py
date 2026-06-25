@@ -1,15 +1,18 @@
 """Two-phase voice-to-text pipeline.
 
-Phase 1: free Speech Recognition (Google Web Speech via the SpeechRecognition
-         library). Produces a transcript + confidence and a difficulty "level".
-Phase 2: AI fallback (Gemini) — only used when Phase 1 says the audio is "hard".
+Phase 1: free, offline Speech-to-Text using faster-whisper (OpenAI Whisper,
+         optimized). Transcribes the FULL audio reliably (its own VAD + 30s
+         windowing) — no API key, no length cutoff. Produces a transcript +
+         confidence and a difficulty "level".
+Phase 2: AI fallback (Gemini) — only used when Phase 1 returns nothing / very
+         low confidence.
 
 Both phases return the same dict shape so the API contract stays stable:
 
     {
       "text": str,
       "level": "easy" | "hard",
-      "engine": "speech_recognition" | "gemini",
+      "engine": "whisper" | "gemini",
       "confidence": float,
       "phase": 1 | 2,
       "note": str,
@@ -18,10 +21,10 @@ Both phases return the same dict shape so the API contract stays stable:
 
 import glob
 import io
+import math
 import os
 import shutil
 
-import speech_recognition as sr
 from pydub import AudioSegment
 
 
@@ -79,8 +82,14 @@ _configure_ffmpeg()
 
 # --- config (read from environment / .env) ---------------------------------
 
-CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.75"))
+CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.45"))
 MIN_WORDS = int(os.getenv("MIN_WORDS", "1"))
+
+# Whisper (offline) — Phase 1 engine. Larger models are more accurate but slower.
+# tiny.en | base.en | small.en | medium.en | large-v3
+WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base.en").strip()
+WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "cpu").strip()
+WHISPER_COMPUTE = os.getenv("WHISPER_COMPUTE", "int8").strip()
 
 # Gemini — used for Phase 2 audio transcription (audio-capable model).
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
@@ -100,13 +109,7 @@ SUMMARY_PROVIDER = os.getenv(
 ).strip().lower()
 
 
-# --- audio decoding ---------------------------------------------------------
-
-# Google's free Web Speech endpoint only reliably transcribes short clips
-# (~10-15s). For longer audio we split into chunks on silence and transcribe
-# each, so nothing gets cut off.
-CHUNK_MAX_MS = 30_000  # cap each chunk at ~30s for the free recognizer
-
+# --- audio decoding (only needed for the optional Gemini fallback) ----------
 
 def decode_to_segment(raw: bytes) -> AudioSegment:
     """Decode any uploaded/recorded audio into a 16 kHz mono AudioSegment."""
@@ -121,132 +124,79 @@ def segment_to_wav_bytes(audio: AudioSegment) -> bytes:
 
 
 def decode_to_wav(raw: bytes) -> bytes:
-    """Back-compat helper: decode any audio to 16 kHz mono WAV bytes."""
+    """Decode any audio to 16 kHz mono WAV bytes (for Gemini)."""
     return segment_to_wav_bytes(decode_to_segment(raw))
 
 
-def _split_into_chunks(audio: AudioSegment) -> list[AudioSegment]:
-    """Split audio into <=CHUNK_MAX_MS pieces, preferring silence boundaries."""
-    if len(audio) <= CHUNK_MAX_MS:
-        return [audio]
+# --- Phase 1: free offline Speech-to-Text (faster-whisper) ------------------
 
-    from pydub.silence import split_on_silence
-
-    # Split on pauses so we never cut a word in half.
-    pieces = split_on_silence(
-        audio,
-        min_silence_len=400,
-        silence_thresh=audio.dBFS - 16,
-        keep_silence=300,
-    )
-    if not pieces:
-        pieces = [audio]
-
-    # Merge tiny pieces up to the cap; hard-slice anything still too long.
-    chunks: list[AudioSegment] = []
-    buf: AudioSegment | None = None
-    for piece in pieces:
-        if len(piece) > CHUNK_MAX_MS:
-            if buf is not None:
-                chunks.append(buf)
-                buf = None
-            for i in range(0, len(piece), CHUNK_MAX_MS):
-                chunks.append(piece[i:i + CHUNK_MAX_MS])
-        elif buf is None:
-            buf = piece
-        elif len(buf) + len(piece) <= CHUNK_MAX_MS:
-            buf += piece
-        else:
-            chunks.append(buf)
-            buf = piece
-    if buf is not None:
-        chunks.append(buf)
-    return chunks
+_whisper_model = None
 
 
-# --- Phase 1: free speech recognition --------------------------------------
+def _get_whisper():
+    """Lazy-load the Whisper model once (downloaded on first use, then cached)."""
+    global _whisper_model
+    if _whisper_model is None:
+        from faster_whisper import WhisperModel
 
-def _recognize_chunk(recognizer: sr.Recognizer, chunk: AudioSegment) -> tuple[str, float]:
-    """Recognize one chunk; returns (text, confidence). Empty on failure."""
-    with sr.AudioFile(io.BytesIO(segment_to_wav_bytes(chunk))) as source:
-        audio_data = recognizer.record(source)
-    try:
-        raw = recognizer.recognize_google(audio_data, language="en-US", show_all=True)
-    except (sr.UnknownValueError, sr.RequestError):
-        return "", 0.0
-    return _best_alternative(raw)
+        _whisper_model = WhisperModel(
+            WHISPER_MODEL, device=WHISPER_DEVICE, compute_type=WHISPER_COMPUTE
+        )
+    return _whisper_model
 
 
-def phase1_speech_recognition(audio: AudioSegment) -> dict:
-    """Run Google's free Web Speech recognizer over (chunked) audio and grade it.
+def phase1_whisper(raw: bytes) -> dict:
+    """Transcribe the full audio offline with Whisper.
 
-    Long audio is split on silence and transcribed chunk-by-chunk, then joined,
-    so nothing is dropped. `level` is "easy" when we're confident enough to keep
-    the result, otherwise "hard" (caller may then run Phase 2).
+    faster-whisper decodes the bytes itself (via PyAV) and processes the entire
+    clip with voice-activity detection, so long audio is never cut off.
     """
-    recognizer = sr.Recognizer()
-    chunks = _split_into_chunks(audio)
+    model = _get_whisper()
+
+    # vad_filter trims silence so long recordings stay accurate and don't repeat.
+    segments, _info = model.transcribe(
+        io.BytesIO(raw),
+        language="en",
+        beam_size=5,
+        vad_filter=True,
+    )
 
     parts: list[str] = []
-    confidences: list[float] = []
-    for chunk in chunks:
-        text, conf = _recognize_chunk(recognizer, chunk)
-        if text:
-            parts.append(text)
-            confidences.append(conf)
+    logprobs: list[float] = []
+    for seg in segments:  # generator — iterating runs the transcription
+        chunk = seg.text.strip()
+        if chunk:
+            parts.append(chunk)
+            logprobs.append(seg.avg_logprob)
 
-    full_text = " ".join(parts).strip()
-    confidence = sum(confidences) / len(confidences) if confidences else 0.0
-    word_count = len(full_text.split())
-    recognized_chunks = len(parts)
-    multi = len(chunks) > 1
+    text = " ".join(parts).strip()
+    # avg_logprob (<=0) -> probability via exp(); average across segments.
+    confidence = (
+        sum(math.exp(lp) for lp in logprobs) / len(logprobs) if logprobs else 0.0
+    )
+    word_count = len(text.split())
 
-    if not full_text or word_count < MIN_WORDS:
+    if not text or word_count < MIN_WORDS:
         level = "hard"
     elif confidence >= CONFIDENCE_THRESHOLD:
         level = "easy"
     else:
         level = "hard"
 
-    # If some chunks of a multi-part clip failed, the result is incomplete —
-    # treat as "hard" so Phase 2 (Gemini) can transcribe the whole thing.
-    if multi and recognized_chunks < len(chunks):
-        level = "hard"
-        note = (
-            f"Recognized {recognized_chunks}/{len(chunks)} segments; "
-            "audio may be incomplete."
-        )
-    elif level == "easy":
-        note = f"Clear speech ({len(chunks)} segment(s))."
-    else:
-        note = "Low confidence speech."
+    note = (
+        f"Transcribed offline by Whisper ({WHISPER_MODEL})."
+        if level == "easy"
+        else f"Low-confidence audio (Whisper {WHISPER_MODEL})."
+    )
 
     return {
-        "text": full_text,
+        "text": text,
         "level": level,
-        "engine": "speech_recognition",
+        "engine": "whisper",
         "confidence": round(confidence, 3),
         "phase": 1,
         "note": note,
     }
-
-
-def _best_alternative(raw) -> tuple[str, float]:
-    """Pull the top transcript + confidence out of recognize_google(show_all)."""
-    if not raw or not isinstance(raw, dict):
-        return "", 0.0
-    alternatives = raw.get("alternative", [])
-    if not alternatives:
-        return "", 0.0
-    best = alternatives[0]
-    text = best.get("transcript", "").strip()
-    # Google only attaches "confidence" to the top alternative, and not always.
-    confidence = float(best.get("confidence", 0.0))
-    if confidence == 0.0 and text:
-        # No score returned but we did get text — assume moderate confidence so a
-        # clean result isn't needlessly pushed to the paid/AI phase.
-        confidence = 0.8
-    return text, confidence
 
 
 # --- Phase 2: AI fallback (Gemini) -----------------------------------------
@@ -300,32 +250,33 @@ def phase2_gemini(wav_bytes: bytes) -> dict:
 # --- orchestration ----------------------------------------------------------
 
 def transcribe(raw: bytes) -> dict:
-    """Full pipeline: decode -> Phase 1 (chunked) -> (maybe) Phase 2."""
-    audio = decode_to_segment(raw)
+    """Full pipeline: Phase 1 (offline Whisper) -> (rarely) Phase 2 (Gemini).
 
-    result = phase1_speech_recognition(audio)
+    Whisper handles full-length audio accurately, so it is the primary engine.
+    Gemini only runs as a safety net when Whisper returns empty/near-empty text.
+    """
+    result = phase1_whisper(raw)
 
-    # "easy" + has text -> we're done with the cheap path.
-    if result["level"] == "easy" and result["text"]:
+    # Whisper got a usable transcript -> done. (It transcribes the full clip.)
+    if result["text"] and result["level"] == "easy":
         return result
 
-    # Hard / incomplete audio: try the AI fallback if it's configured.
+    # Very low confidence / empty: try the AI fallback if configured.
     if gemini_available():
-        ai = phase2_gemini(segment_to_wav_bytes(audio))
+        try:
+            ai = phase2_gemini(decode_to_wav(raw))
+        except Exception as exc:  # noqa: BLE001 - decode/AI issue, keep Whisper
+            if result["text"]:
+                return result
+            raise
         if ai["text"]:
             return ai
-        # AI produced nothing — fall through to whatever Phase 1 had.
+        # AI produced nothing — fall back to whatever Whisper had.
         if result["text"]:
-            result["note"] = "Phase 2 returned nothing; showing Phase 1 result."
-            return result
-        return ai
+            result["note"] = "Phase 2 returned nothing; showing Whisper result."
+        return result
 
-    # No AI configured: return the best Phase 1 result, flagged hard.
-    if result["text"]:
-        result["note"] = (
-            "Hard/long speech and no AI key set — showing best free guess. "
-            "Set GEMINI_API_KEY to improve accuracy on long or unclear audio."
-        )
+    # No AI key: return Whisper's result regardless (it's still the full clip).
     return result
 
 

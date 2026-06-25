@@ -23,6 +23,11 @@ WORKDIR /app
 COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Pre-download the Whisper model so the first request isn't slow.
+ARG WHISPER_MODEL=base.en
+ENV WHISPER_MODEL=${WHISPER_MODEL}
+RUN python -c "from faster_whisper import WhisperModel; WhisperModel('${WHISPER_MODEL}', device='cpu', compute_type='int8')"
+
 COPY backend/ ./
 # Drop the built frontend where main.py serves it from (./static).
 COPY --from=frontend /app/frontend/dist ./static
