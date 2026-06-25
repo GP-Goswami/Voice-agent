@@ -7,5 +7,10 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
+    // In dev the app calls relative /api/... — proxy those to the backend so
+    // the same code works in dev and in production (same-origin).
+    proxy: {
+      "/api": "http://localhost:8000",
+    },
   },
 });

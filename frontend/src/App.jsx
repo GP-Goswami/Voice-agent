@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+// Default to same-origin ("" -> relative /api/...). In dev, Vite proxies /api
+// to the backend (see vite.config.js). Override with VITE_API_BASE if needed.
+const API_BASE = import.meta.env.VITE_API_BASE ?? "";
 
 export default function App() {
   const [file, setFile] = useState(null);
