@@ -8,6 +8,9 @@ export default function App() {
   const [file, setFile] = useState(null);
   const [fileName, setFileName] = useState("");
   const [audioUrl, setAudioUrl] = useState("");
+  const [currentTime, setCurrentTime] = useState(0);
+  const audioRef = useRef(null);
+  const lineRefs = useRef([]);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
@@ -173,6 +176,35 @@ export default function App() {
     seconds % 60
   ).padStart(2, "0")}`;
 
+  // --- play-along transcript ---
+  const segments = result?.segments || [];
+  const activeIndex = segments.findIndex(
+    (s) => currentTime >= s.start && currentTime < s.end
+  );
+
+  // Keep the highlighted line in view as the audio plays.
+  useEffect(() => {
+    if (activeIndex >= 0 && lineRefs.current[activeIndex]) {
+      lineRefs.current[activeIndex].scrollIntoView({
+        block: "nearest",
+        behavior: "smooth",
+      });
+    }
+  }, [activeIndex]);
+
+  function seekTo(t) {
+    if (audioRef.current) {
+      audioRef.current.currentTime = t;
+      audioRef.current.play();
+    }
+  }
+
+  function fmtTime(t) {
+    const m = Math.floor(t / 60);
+    const s = Math.floor(t % 60);
+    return `${m}:${String(s).padStart(2, "0")}`;
+  }
+
   return (
     <div className="page">
       <header className="topbar">
@@ -226,7 +258,13 @@ export default function App() {
           <div className="preview">
             <div className="step-label">2 · Preview &amp; test</div>
             <div className="player-row">
-              <audio controls src={audioUrl} className="player" />
+              <audio
+                ref={audioRef}
+                controls
+                src={audioUrl}
+                className="player"
+                onTimeUpdate={(e) => setCurrentTime(e.target.currentTime)}
+              />
             </div>
             <div className="filename">
               <span className="file-chip">🎵 {fileName}</span>
@@ -274,9 +312,26 @@ export default function App() {
               </div>
             </div>
 
-            <div className="transcript">
-              {result.text ? result.text : <em>(no text recognized)</em>}
-            </div>
+            {segments.length > 0 ? (
+              <div className="transcript timed">
+                {segments.map((seg, i) => (
+                  <div
+                    key={i}
+                    ref={(el) => (lineRefs.current[i] = el)}
+                    className={`tline${i === activeIndex ? " active" : ""}`}
+                    onClick={() => seekTo(seg.start)}
+                    title="Click to play from here"
+                  >
+                    <span className="ts">{fmtTime(seg.start)}</span>
+                    <span className="tline-text">{seg.text}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="transcript">
+                {result.text ? result.text : <em>(no text recognized)</em>}
+              </div>
+            )}
 
             <div className="result-actions">
               <button

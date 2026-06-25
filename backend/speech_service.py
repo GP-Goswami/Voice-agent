@@ -163,11 +163,13 @@ def phase1_whisper(raw: bytes) -> dict:
 
     parts: list[str] = []
     logprobs: list[float] = []
+    raw_segments: list[dict] = []
     for seg in segments:  # generator — iterating runs the transcription
         chunk = seg.text.strip()
         if chunk:
             parts.append(chunk)
             logprobs.append(seg.avg_logprob)
+            raw_segments.append({"start": seg.start, "end": seg.end, "text": chunk})
 
     text = " ".join(parts).strip()
     # avg_logprob (<=0) -> probability via exp(); average across segments.
@@ -196,7 +198,31 @@ def phase1_whisper(raw: bytes) -> dict:
         "confidence": round(confidence, 3),
         "phase": 1,
         "note": note,
+        # Timestamped lines (grouped to ~15s) for play-along highlighting.
+        "segments": _group_segments(raw_segments),
     }
+
+
+def _group_segments(segs: list[dict], max_sec: float = 15.0) -> list[dict]:
+    """Merge Whisper segments into lines of up to ~max_sec, keeping timestamps."""
+    lines: list[dict] = []
+    cur: dict | None = None
+    for s in segs:
+        if cur is None:
+            cur = {"start": s["start"], "end": s["end"], "text": s["text"]}
+        elif s["end"] - cur["start"] <= max_sec:
+            cur["text"] += " " + s["text"]
+            cur["end"] = s["end"]
+        else:
+            lines.append(cur)
+            cur = {"start": s["start"], "end": s["end"], "text": s["text"]}
+    if cur is not None:
+        lines.append(cur)
+    # Round times so the JSON is small and clean.
+    for ln in lines:
+        ln["start"] = round(ln["start"], 2)
+        ln["end"] = round(ln["end"], 2)
+    return lines
 
 
 # --- Phase 2: AI fallback (Gemini) -----------------------------------------
@@ -222,6 +248,7 @@ def phase2_gemini(wav_bytes: bytes) -> dict:
             "confidence": 0.0,
             "phase": 2,
             "note": "Phase 2 skipped: GEMINI_API_KEY is not set.",
+            "segments": [],
         }
 
     model = _gemini_model()
@@ -244,6 +271,7 @@ def phase2_gemini(wav_bytes: bytes) -> dict:
         "confidence": 0.9 if text else 0.0,
         "phase": 2,
         "note": "Transcribed by AI model (Gemini) for full, accurate coverage.",
+        "segments": [],
     }
 
 

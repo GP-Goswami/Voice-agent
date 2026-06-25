@@ -352,6 +352,56 @@ h1 {
   white-space: pre-wrap;
 }
 
+/* timed / play-along transcript */
+.transcript.timed {
+  padding: 8px;
+  max-height: 280px;
+  overflow-y: auto;
+  white-space: normal;
+}
+
+.tline {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  padding: 9px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.tline:hover {
+  background: #eef2ff;
+}
+
+.tline .ts {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: #94a3b8;
+  font-variant-numeric: tabular-nums;
+  min-width: 38px;
+}
+
+.tline-text {
+  font-size: 15.5px;
+  line-height: 1.55;
+  color: #334155;
+}
+
+.tline.active {
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+}
+
+.tline.active .ts {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.tline.active .tline-text {
+  color: #fff;
+  font-weight: 600;
+}
+
 .result-actions {
   display: flex;
   align-items: center;
